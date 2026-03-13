@@ -1,180 +1,130 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Dimensions } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { useRouter, Stack } from 'expo-router';
+import { useRouter, useLocalSearchParams, Stack } from 'expo-router';
 
-const GRID_SIZE = 4;
-const TOTAL_SQUARES = GRID_SIZE * GRID_SIZE;
+export const LEVELS = Array.from({ length: 30 }, (_, i) => {
+  const levelNum = i + 1;
+  let grid = 3;
+  if (levelNum > 10) grid = 4;
+  if (levelNum > 20) grid = 5;
+  return {
+    level: levelNum, gridSize: grid,
+    target: 5 + (levelNum * 2),
+    time: Math.max(10, 22 - Math.floor(levelNum / 2)),
+    speed: Math.max(250, 1000 - (levelNum * 25))
+  };
+});
 
 export default function GameScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const startLevelIndex = parseInt(params.level as string) || 0;
 
-  // --- Game State ---
-  const [activeSquare, setActiveSquare] = useState<number | null>(null);
+  // --- State ---
+  const [currentLevel, setCurrentLevel] = useState(startLevelIndex);
   const [score, setScore] = useState(0);
-  const [highScore, setHighScore] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(20);
-  const [gameState, setGameState] = useState<'COUNTDOWN' | 'PLAYING' | 'GAME_OVER'>('COUNTDOWN');
+  const [lives, setLives] = useState(3);
+  const [timeLeft, setTimeLeft] = useState(LEVELS[startLevelIndex].time);
+  const [activeSquare, setActiveSquare] = useState<number | null>(null);
   const [countdown, setCountdown] = useState(3);
+  const [gameState, setGameState] = useState<'COUNTDOWN' | 'PLAYING' | 'LEVEL_COMPLETE' | 'GAME_OVER' | 'GAME_WON'>('COUNTDOWN');
 
-  // 1. Load High Score on Mount
-  useEffect(() => {
-    const loadHighScore = async () => {
-      try {
-        const saved = await AsyncStorage.getItem('highScore');
-        if (saved) setHighScore(parseInt(saved));
-      } catch (e) {
-        console.error("Failed to load high score", e);
-      }
-    };
-    loadHighScore();
-  }, []);
+  const config = LEVELS[currentLevel];
+  const totalSquares = config.gridSize * config.gridSize;
 
-  // 2. Countdown Logic (3, 2, 1, GO!)
   useEffect(() => {
     if (gameState === 'COUNTDOWN') {
       if (countdown > 0) {
-        const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
-        return () => clearTimeout(timer);
-      } else {
-        setGameState('PLAYING');
-      }
+        const t = setTimeout(() => setCountdown(countdown - 1), 1000);
+        return () => clearTimeout(t);
+      } else { setGameState('PLAYING'); }
     }
   }, [gameState, countdown]);
 
-  // 3. Main Game Loop (Mole movement and Clock)
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
-
-    if (timeLeft <= 0) {
-      handleEndGame();
-      return;
-    }
-
-    // SPEED LOGIC: Mole jumps faster as score increases
-    const speed = Math.max(350, 900 - (score * 40)); 
+    if (timeLeft <= 0) { handleEndGame(); return; }
 
     const moleTimer = setInterval(() => {
-      const randomSquare = Math.floor(Math.random() * TOTAL_SQUARES);
-      setActiveSquare(randomSquare);
-    }, speed);
+      setActiveSquare(Math.floor(Math.random() * totalSquares));
+    }, config.speed);
 
-    const clockTimer = setInterval(() => {
-      setTimeLeft((prev) => prev - 1);
-    }, 1000);
+    const clockTimer = setInterval(() => setTimeLeft(t => t - 1), 1000);
 
-    return () => {
-      clearInterval(moleTimer);
-      clearInterval(clockTimer);
-    };
-  }, [gameState, timeLeft, score]);
+    return () => { clearInterval(moleTimer); clearInterval(clockTimer); };
+  }, [gameState, timeLeft]);
 
-  // --- Game Actions ---
   const handleEndGame = async () => {
-    setGameState('GAME_OVER');
     setActiveSquare(null);
-    
-    // Heavy vibration for game over
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-
-    if (score > highScore) {
-      setHighScore(score);
-      await AsyncStorage.setItem('highScore', score.toString());
+    if (score >= config.target) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Update Progress
+      const savedProgress = await AsyncStorage.getItem('unlockedLevel');
+      const currentUnlocked = savedProgress ? parseInt(savedProgress) : 1;
+      if (currentLevel + 2 > currentUnlocked) {
+        await AsyncStorage.setItem('unlockedLevel', (currentLevel + 2).toString());
+      }
+      setGameState(currentLevel < 29 ? 'LEVEL_COMPLETE' : 'GAME_WON');
+    } else {
+      setLives(l => l - 1);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setGameState('GAME_OVER');
     }
   };
 
-  const handlePress = (index: number) => {
-    if (gameState === 'PLAYING' && index === activeSquare) {
-      // Tactile "thud" for a successful hit
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      setScore(score + 1);
-      setActiveSquare(null);
-    }
+  const nextLevel = () => {
+    const idx = currentLevel + 1;
+    setCurrentLevel(idx);
+    setScore(0); setTimeLeft(LEVELS[idx].time); setCountdown(3); setGameState('COUNTDOWN');
   };
 
-  const restartGame = () => {
-    setScore(0);
-    setTimeLeft(20);
-    setCountdown(3);
-    setGameState('COUNTDOWN');
+  const retry = () => {
+    setScore(0); setTimeLeft(config.time); setCountdown(3); setGameState('COUNTDOWN');
   };
 
   return (
     <View style={styles.container}>
-      {/* Hide the navigation header for a full-screen feel */}
-      <Stack.Screen options={{ headerShown: false }} />
-
-      <Text style={styles.header}>WHACK-A-MOLE</Text>
-      
-      {/* HUD: Score and Time */}
-      <View style={styles.statsRow}>
-        <View style={styles.statBox}>
-          <Text style={styles.statLabel}>SCORE</Text>
-          <Text style={styles.statValue}>{score}</Text>
-        </View>
-        <View style={styles.statBox}>
-          <Text style={styles.statLabel}>TIME</Text>
-          <Text style={styles.statValue}>{timeLeft}s</Text>
-        </View>
-        <View style={styles.statBox}>
-          <Text style={styles.statLabel}>BEST</Text>
-          <Text style={styles.statValue}>{highScore}</Text>
+      <Stack.Screen options={{ headerShown: true }} />
+      <View style={styles.header}>
+        <Text style={styles.levelTitle}>LEVEL {config.level}</Text>
+        <View style={styles.livesRow}>
+          {[1,2,3].map(i => <Text key={i} style={[styles.heart, i > lives && {opacity: 0.2}]}>❤️</Text>)}
         </View>
       </View>
 
-      {/* The 4x4 Grid */}
+      <View style={styles.stats}>
+        <View style={styles.statBox}><Text style={styles.label}>SCORE</Text><Text style={styles.val}>{score}</Text></View>
+        <View style={styles.statBox}><Text style={styles.label}>TIME</Text><Text style={styles.val}>{timeLeft}s</Text></View>
+        <View style={styles.statBox}><Text style={styles.label}>TARGET</Text><Text style={[styles.val, {color: '#2ECC71'}]}>{config.target}</Text></View>
+      </View>
+
       <View style={styles.grid}>
-        {Array.from({ length: TOTAL_SQUARES }).map((_, i) => (
-          <TouchableOpacity
-            key={i}
-            style={styles.square}
-            onPress={() => handlePress(i)}
-            activeOpacity={0.7}
+        {Array.from({ length: totalSquares }).map((_, i) => (
+          <TouchableOpacity 
+            key={i} 
+            style={[styles.square, { width: `${100 / config.gridSize}%`, height: `${100 / config.gridSize}%` }]} 
+            onPress={() => gameState === 'PLAYING' && i === activeSquare && (setScore(s => s + 1), setActiveSquare(null), Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium))}
           >
             {activeSquare === i && <View style={styles.mole} />}
           </TouchableOpacity>
         ))}
       </View>
 
-      {/* --- Overlays --- */}
-
-      {/* 1. Countdown Overlay */}
-      {gameState === 'COUNTDOWN' && (
+      {gameState !== 'PLAYING' && (
         <View style={styles.overlay}>
-          <Text style={styles.countdownText}>{countdown === 0 ? 'GO!' : countdown}</Text>
-        </View>
-      )}
-
-      {/* 2. Game Over Overlay */}
-      {gameState === 'GAME_OVER' && (
-        <View style={styles.overlay}>
-          <Text style={styles.gameOverTitle}>TIME'S UP!</Text>
-          
-          <View style={styles.resultCard}>
-            <Text style={styles.resultLabel}>YOUR SCORE</Text>
-            <Text style={styles.resultValue}>{score}</Text>
-            
-            <View style={styles.divider} />
-            
-            <Text style={styles.resultLabel}>BEST RECORD</Text>
-            <Text style={[styles.resultValue, { color: '#F1C40F' }]}>{highScore}</Text>
-          </View>
-
-          {score >= highScore && score > 0 && (
-            <Text style={styles.newRecordText}>🏆 NEW HIGH SCORE! 🏆</Text>
+          {gameState === 'COUNTDOWN' ? (
+            <Text style={styles.cdText}>{countdown === 0 ? "GO!" : countdown}</Text>
+          ) : (
+            <>
+              <Text style={styles.statusText}>{gameState === 'LEVEL_COMPLETE' ? 'LEVEL CLEAR!' : gameState === 'GAME_WON' ? 'YOU WIN!' : 'FAILED!'}</Text>
+              <TouchableOpacity style={styles.btn} onPress={gameState === 'LEVEL_COMPLETE' ? nextLevel : retry}>
+                <Text style={styles.btnText}>{gameState === 'LEVEL_COMPLETE' ? 'NEXT LEVEL' : 'RETRY'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => router.replace('/')}><Text style={styles.homeBtn}>BACK TO LEVELS</Text></TouchableOpacity>
+            </>
           )}
-
-          <TouchableOpacity style={styles.button} onPress={restartGame}>
-            <Text style={styles.buttonText}>PLAY AGAIN</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.homeButton} 
-            onPress={() => router.replace('/')}
-          >
-            <Text style={styles.homeButtonText}>RETURN TO HOME</Text>
-          </TouchableOpacity>
         </View>
       )}
     </View>
@@ -182,142 +132,22 @@ export default function GameScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: '#1A1A1A', 
-    alignItems: 'center', 
-    justifyContent: 'center' 
-  },
-  header: { 
-    fontSize: 28, 
-    fontWeight: '900', 
-    color: '#FFF', 
-    marginBottom: 20, 
-    letterSpacing: 2 
-  },
-  statsRow: { 
-    flexDirection: 'row', 
-    gap: 10, 
-    marginBottom: 20 
-  },
-  statBox: { 
-    backgroundColor: '#333', 
-    padding: 8, 
-    borderRadius: 10, 
-    alignItems: 'center', 
-    minWidth: 75 
-  },
-  statLabel: { 
-    color: '#888', 
-    fontSize: 9, 
-    fontWeight: 'bold' 
-  },
-  statValue: { 
-    color: '#F1C40F', 
-    fontSize: 18, 
-    fontWeight: '900' 
-  },
-  grid: { 
-    width: 340, 
-    height: 340, 
-    flexDirection: 'row', 
-    flexWrap: 'wrap', 
-    padding: 5, 
-    backgroundColor: '#222', 
-    borderRadius: 15 
-  },
-  square: { 
-    width: '25%', 
-    height: '25%', 
-    padding: 5, 
-    justifyContent: 'center', 
-    alignItems: 'center' 
-  },
-  mole: { 
-    width: '90%', 
-    height: '90%', 
-    backgroundColor: '#F1C40F', 
-    borderRadius: 8, 
-    elevation: 8,
-    shadowColor: '#F1C40F',
-    shadowOpacity: 0.6,
-    shadowRadius: 8
-  },
-  overlay: { 
-    ...StyleSheet.absoluteFillObject, 
-    backgroundColor: 'rgba(0,0,0,0.95)', 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    padding: 20,
-    zIndex: 10
-  },
-  countdownText: { 
-    fontSize: 120, 
-    color: '#F1C40F', 
-    fontWeight: '900' 
-  },
-  gameOverTitle: { 
-    fontSize: 42, 
-    color: '#E74C3C', 
-    fontWeight: '900', 
-    marginBottom: 30 
-  },
-  resultCard: { 
-    backgroundColor: '#222', 
-    width: '80%', 
-    padding: 30, 
-    borderRadius: 20, 
-    alignItems: 'center', 
-    borderWidth: 1, 
-    borderColor: '#444', 
-    marginBottom: 20 
-  },
-  resultLabel: { 
-    color: '#888', 
-    fontSize: 14, 
-    fontWeight: 'bold' 
-  },
-  resultValue: { 
-    color: '#FFF', 
-    fontSize: 48, 
-    fontWeight: '900', 
-    marginVertical: 10 
-  },
-  divider: { 
-    height: 1, 
-    width: '100%', 
-    backgroundColor: '#444', 
-    marginVertical: 20 
-  },
-  newRecordText: {
-    color: '#F1C40F',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 30,
-    textTransform: 'uppercase'
-  },
-  button: { 
-    backgroundColor: '#2ECC71', 
-    paddingHorizontal: 50, 
-    paddingVertical: 18, 
-    borderRadius: 40 
-  },
-  buttonText: { 
-    color: '#FFF', 
-    fontSize: 20, 
-    fontWeight: 'bold' 
-  },
-  homeButton: { 
-    marginTop: 20, 
-    paddingHorizontal: 30, 
-    paddingVertical: 12, 
-    borderRadius: 30,
-    borderWidth: 1,
-    borderColor: '#444' 
-  },
-  homeButtonText: { 
-    color: '#888', 
-    fontSize: 16, 
-    fontWeight: 'bold' 
-  },
+  container: { flex: 1, backgroundColor: '#1A1A1A', alignItems: 'center', justifyContent: 'center' },
+  header: { alignItems: 'center', marginBottom: 20 },
+  levelTitle: { color: '#FFF', fontSize: 28, fontWeight: '900' },
+  livesRow: { flexDirection: 'row', gap: 5, marginTop: 5 },
+  heart: { fontSize: 20 },
+  stats: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  statBox: { backgroundColor: '#333', padding: 10, borderRadius: 12, alignItems: 'center', minWidth: 80 },
+  label: { color: '#888', fontSize: 10, fontWeight: 'bold' },
+  val: { color: '#F1C40F', fontSize: 20, fontWeight: '900' },
+  grid: { width: 350, height: 350, flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#222', borderRadius: 20, padding: 5 },
+  square: { padding: 5, justifyContent: 'center', alignItems: 'center' },
+  mole: { width: '90%', height: '90%', backgroundColor: '#F1C40F', borderRadius: 10 },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
+  cdText: { fontSize: 100, color: '#F1C40F', fontWeight: '900' },
+  statusText: { fontSize: 40, color: '#FFF', fontWeight: '900', marginBottom: 20 },
+  btn: { backgroundColor: '#2ECC71', paddingHorizontal: 40, paddingVertical: 15, borderRadius: 30 },
+  btnText: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
+  homeBtn: { color: '#888', marginTop: 20, fontWeight: 'bold' }
 });
