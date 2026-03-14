@@ -1,130 +1,175 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useContext } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Image } from 'react-native';
+import { useRouter, useLocalSearchParams, Stack } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { useRouter, useLocalSearchParams, Stack } from 'expo-router';
+import { MenuContext, LEVELS } from '../constants';
 
-export const LEVELS = Array.from({ length: 30 }, (_, i) => {
-  const levelNum = i + 1;
-  let grid = 3;
-  if (levelNum > 10) grid = 4;
-  if (levelNum > 20) grid = 5;
-  return {
-    level: levelNum, gridSize: grid,
-    target: 5 + (levelNum * 2),
-    time: Math.max(10, 22 - Math.floor(levelNum / 2)),
-    speed: Math.max(250, 1000 - (levelNum * 25))
-  };
-});
+const { width } = Dimensions.get('window');
 
 export default function GameScreen() {
+  const { menuVisible, levelsVisible } = useContext(MenuContext);
+  const isPaused = menuVisible || levelsVisible;
   const router = useRouter();
   const params = useLocalSearchParams();
-  const startLevelIndex = parseInt(params.level as string) || 0;
+  
+  const isEndless = params.mode === 'endless';
+  const levelIdx = parseInt(params.level as string) || 0;
+  const config = isEndless ? { level: '∞', gridSize: 4, target: 999, time: 999, speed: 700 } : LEVELS[levelIdx];
 
-  // --- State ---
-  const [currentLevel, setCurrentLevel] = useState(startLevelIndex);
   const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0); // Track best Endless score
   const [lives, setLives] = useState(3);
-  const [timeLeft, setTimeLeft] = useState(LEVELS[startLevelIndex].time);
+  const [timeLeft, setTimeLeft] = useState(config.time);
   const [activeSquare, setActiveSquare] = useState<number | null>(null);
-  const [countdown, setCountdown] = useState(3);
-  const [gameState, setGameState] = useState<'COUNTDOWN' | 'PLAYING' | 'LEVEL_COMPLETE' | 'GAME_OVER' | 'GAME_WON'>('COUNTDOWN');
+  const [redSquare, setRedSquare] = useState<number | null>(null);
+  const [gameState, setGameState] = useState<'PLAYING' | 'WON' | 'LOST'>('PLAYING');
 
-  const config = LEVELS[currentLevel];
-  const totalSquares = config.gridSize * config.gridSize;
-
+  // Load High Score on Start
   useEffect(() => {
-    if (gameState === 'COUNTDOWN') {
-      if (countdown > 0) {
-        const t = setTimeout(() => setCountdown(countdown - 1), 1000);
-        return () => clearTimeout(t);
-      } else { setGameState('PLAYING'); }
+    if (isEndless) {
+      AsyncStorage.getItem('endlessHighScore').then(val => {
+        if (val) setHighScore(parseInt(val));
+      });
     }
-  }, [gameState, countdown]);
+    resetLevelState();
+  }, [levelIdx, params.mode]);
 
+  const resetLevelState = () => {
+    setScore(0);
+    setLives(3);
+    setTimeLeft(config.time);
+    setGameState('PLAYING');
+    setActiveSquare(null);
+    setRedSquare(null);
+  };
+
+  // Clock Hook
+  useEffect(() => {
+    if (gameState !== 'PLAYING' || isPaused || isEndless) return;
+    const clockTimer = setInterval(() => {
+      setTimeLeft((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(clockTimer);
+  }, [gameState, isPaused, isEndless]);
+
+  // Mole & Trap Hook
+  useEffect(() => {
+    if (gameState !== 'PLAYING' || isPaused) return;
+    const moleTimer = setInterval(() => {
+      const newMole = Math.floor(Math.random() * (config.gridSize * config.gridSize));
+      setActiveSquare(newMole);
+      if (isEndless && Math.random() > 0.6) {
+        let newTrap = Math.floor(Math.random() * (config.gridSize * config.gridSize));
+        while (newTrap === newMole) newTrap = Math.floor(Math.random() * (config.gridSize * config.gridSize));
+        setRedSquare(newTrap);
+      } else {
+        setRedSquare(null);
+      }
+    }, config.speed);
+    return () => clearInterval(moleTimer);
+  }, [gameState, isPaused, config.speed]);
+
+  // Win/Loss Checker
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
-    if (timeLeft <= 0) { handleEndGame(); return; }
-
-    const moleTimer = setInterval(() => {
-      setActiveSquare(Math.floor(Math.random() * totalSquares));
-    }, config.speed);
-
-    const clockTimer = setInterval(() => setTimeLeft(t => t - 1), 1000);
-
-    return () => { clearInterval(moleTimer); clearInterval(clockTimer); };
-  }, [gameState, timeLeft]);
-
-  const handleEndGame = async () => {
-    setActiveSquare(null);
-    if (score >= config.target) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Update Progress
-      const savedProgress = await AsyncStorage.getItem('unlockedLevel');
-      const currentUnlocked = savedProgress ? parseInt(savedProgress) : 1;
-      if (currentLevel + 2 > currentUnlocked) {
-        await AsyncStorage.setItem('unlockedLevel', (currentLevel + 2).toString());
+    if (lives <= 0) {
+      setGameState('LOST');
+      if (isEndless && score > highScore) saveHighScore(score);
+    } else if (!isEndless && timeLeft === 0) {
+      if (score >= config.target) {
+        setGameState('WON');
+        saveProgress();
+      } else {
+        setGameState('LOST');
       }
-      setGameState(currentLevel < 29 ? 'LEVEL_COMPLETE' : 'GAME_WON');
-    } else {
-      setLives(l => l - 1);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setGameState('GAME_OVER');
     }
+  }, [lives, timeLeft, score]);
+
+  const saveProgress = async () => {
+    const current = await AsyncStorage.getItem('unlockedLevel');
+    const next = config.level + 1;
+    if (!current || next > parseInt(current)) await AsyncStorage.setItem('unlockedLevel', next.toString());
   };
 
-  const nextLevel = () => {
-    const idx = currentLevel + 1;
-    setCurrentLevel(idx);
-    setScore(0); setTimeLeft(LEVELS[idx].time); setCountdown(3); setGameState('COUNTDOWN');
+  const saveHighScore = async (s: number) => {
+    setHighScore(s);
+    await AsyncStorage.setItem('endlessHighScore', s.toString());
   };
 
-  const retry = () => {
-    setScore(0); setTimeLeft(config.time); setCountdown(3); setGameState('COUNTDOWN');
+  const handleTap = (index: number) => {
+    if (gameState !== 'PLAYING' || isPaused) return;
+    if (index === activeSquare) {
+      setScore(prev => prev + 1);
+      setActiveSquare(null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } else if (index === redSquare || !isEndless) { // Only penalize "wrong square" hits if not hit mole
+        setLives(prev => Math.max(0, prev - 1));
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
   };
 
   return (
     <View style={styles.container}>
-      <Stack.Screen options={{ headerShown: true }} />
-      <View style={styles.header}>
-        <Text style={styles.levelTitle}>LEVEL {config.level}</Text>
-        <View style={styles.livesRow}>
-          {[1,2,3].map(i => <Text key={i} style={[styles.heart, i > lives && {opacity: 0.2}]}>❤️</Text>)}
+      <Stack.Screen 
+        options={{ 
+          headerLeft: () => null, 
+          headerBackVisible: false,
+          headerTitle: () => (
+            <Image 
+              source={require('../assets/images/gavel.png')}
+              style={{ width: 40, height: 40, resizeMode: 'contain' }} 
+            />
+          )
+        }} 
+      />
+      
+      <View style={styles.headerInfo}>
+        <Text style={styles.levelLabel}>{isEndless ? 'ENDLESS MODE' : `LEVEL ${config.level}`}</Text>
+        <Text style={styles.livesText}>{lives > 0 ? '❤️ '.repeat(lives) : '💀 DEAD'}</Text>
+      </View>
+
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>SCORE</Text>
+          <Text style={styles.statValue}>{score}</Text>
+        </View>
+        <View style={[styles.statCard, { borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#333' }]}>
+          <Text style={styles.statLabel}>{isEndless ? 'BEST' : 'TIME'}</Text>
+          <Text style={styles.statValue}>{isEndless ? highScore : `${timeLeft}s`}</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>{isEndless ? 'MODE' : 'TARGET'}</Text>
+          <Text style={styles.statValue}>{isEndless ? '∞' : config.target}</Text>
         </View>
       </View>
 
-      <View style={styles.stats}>
-        <View style={styles.statBox}><Text style={styles.label}>SCORE</Text><Text style={styles.val}>{score}</Text></View>
-        <View style={styles.statBox}><Text style={styles.label}>TIME</Text><Text style={styles.val}>{timeLeft}s</Text></View>
-        <View style={styles.statBox}><Text style={styles.label}>TARGET</Text><Text style={[styles.val, {color: '#2ECC71'}]}>{config.target}</Text></View>
-      </View>
-
-      <View style={styles.grid}>
-        {Array.from({ length: totalSquares }).map((_, i) => (
+      <View style={[styles.grid, { width: width - 40, height: width - 40 }]}>
+        {Array.from({ length: config.gridSize * config.gridSize }).map((_, i) => (
           <TouchableOpacity 
             key={i} 
-            style={[styles.square, { width: `${100 / config.gridSize}%`, height: `${100 / config.gridSize}%` }]} 
-            onPress={() => gameState === 'PLAYING' && i === activeSquare && (setScore(s => s + 1), setActiveSquare(null), Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium))}
+            activeOpacity={1}
+            style={[styles.square, { width: (width - 40) / config.gridSize, height: (width - 40) / config.gridSize }]}
+            onPress={() => handleTap(i)}
           >
             {activeSquare === i && <View style={styles.mole} />}
+            {redSquare === i && <View style={[styles.mole, { backgroundColor: '#E74C3C' }]} />}
           </TouchableOpacity>
         ))}
       </View>
 
       {gameState !== 'PLAYING' && (
         <View style={styles.overlay}>
-          {gameState === 'COUNTDOWN' ? (
-            <Text style={styles.cdText}>{countdown === 0 ? "GO!" : countdown}</Text>
-          ) : (
-            <>
-              <Text style={styles.statusText}>{gameState === 'LEVEL_COMPLETE' ? 'LEVEL CLEAR!' : gameState === 'GAME_WON' ? 'YOU WIN!' : 'FAILED!'}</Text>
-              <TouchableOpacity style={styles.btn} onPress={gameState === 'LEVEL_COMPLETE' ? nextLevel : retry}>
-                <Text style={styles.btnText}>{gameState === 'LEVEL_COMPLETE' ? 'NEXT LEVEL' : 'RETRY'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.replace('/')}><Text style={styles.homeBtn}>BACK TO LEVELS</Text></TouchableOpacity>
-            </>
-          )}
+          <Text style={styles.resultText}>{gameState === 'WON' ? 'LEVEL COMPLETE!' : 'GAME OVER'}</Text>
+          <TouchableOpacity 
+            style={styles.button} 
+            onPress={gameState === 'WON' ? () => router.setParams({ level: (levelIdx + 1).toString() }) : resetLevelState}
+          >
+            <Text style={styles.buttonText}>{gameState === 'WON' ? 'NEXT LEVEL' : 'TRY AGAIN'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.replace('/')} style={{ marginTop: 25 }}>
+            <Text style={styles.quitText}>QUIT TO MENU</Text>
+          </TouchableOpacity>
         </View>
       )}
     </View>
@@ -132,22 +177,20 @@ export default function GameScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1A1A1A', alignItems: 'center', justifyContent: 'center' },
-  header: { alignItems: 'center', marginBottom: 20 },
-  levelTitle: { color: '#FFF', fontSize: 28, fontWeight: '900' },
-  livesRow: { flexDirection: 'row', gap: 5, marginTop: 5 },
-  heart: { fontSize: 20 },
-  stats: { flexDirection: 'row', gap: 10, marginBottom: 20 },
-  statBox: { backgroundColor: '#333', padding: 10, borderRadius: 12, alignItems: 'center', minWidth: 80 },
-  label: { color: '#888', fontSize: 10, fontWeight: 'bold' },
-  val: { color: '#F1C40F', fontSize: 20, fontWeight: '900' },
-  grid: { width: 350, height: 350, flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#222', borderRadius: 20, padding: 5 },
-  square: { padding: 5, justifyContent: 'center', alignItems: 'center' },
-  mole: { width: '90%', height: '90%', backgroundColor: '#F1C40F', borderRadius: 10 },
-  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
-  cdText: { fontSize: 100, color: '#F1C40F', fontWeight: '900' },
-  statusText: { fontSize: 40, color: '#FFF', fontWeight: '900', marginBottom: 20 },
-  btn: { backgroundColor: '#2ECC71', paddingHorizontal: 40, paddingVertical: 15, borderRadius: 30 },
-  btnText: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
-  homeBtn: { color: '#888', marginTop: 20, fontWeight: 'bold' }
+  container: { flex: 1, backgroundColor: '#1A1A1A', alignItems: 'center' },
+  headerInfo: { alignItems: 'center', marginTop: 10, marginBottom: 15 },
+  levelLabel: { color: '#F1C40F', fontSize: 22, fontWeight: '900', letterSpacing: 4, marginBottom: 10 },
+  livesText: { fontSize: 26, letterSpacing: 5 },
+  statsRow: { flexDirection: 'row', backgroundColor: '#222', width: '90%', borderRadius: 15, marginBottom: 40, overflow: 'hidden' },
+  statCard: { flex: 1, paddingVertical: 15, alignItems: 'center', justifyContent: 'center' },
+  statLabel: { color: '#888', fontSize: 10, fontWeight: '900', marginBottom: 5 },
+  statValue: { color: '#FFF', fontSize: 22, fontWeight: '900' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap' },
+  square: { backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
+  mole: { width: '85%', height: '85%', backgroundColor: '#F1C40F', borderRadius: 15 },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center', zIndex: 10 },
+  resultText: { color: '#FFF', fontSize: 32, fontWeight: '900', marginBottom: 40, letterSpacing: 2 },
+  button: { backgroundColor: '#F1C40F', paddingHorizontal: 50, paddingVertical: 20, borderRadius: 50 },
+  buttonText: { color: '#1A1A1A', fontSize: 22, fontWeight: '900', letterSpacing: 1 },
+  quitText: { color: '#666', fontSize: 16, fontWeight: 'bold', textDecorationLine: 'underline' },
 });
