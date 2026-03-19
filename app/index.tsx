@@ -26,7 +26,7 @@ export default function HomeScreen() {
 
       <View style={styles.menuContainer}>
         <TouchableOpacity style={styles.playButton} onPress={() => setLevelModalOpen(true)}>
-          <Text style={styles.playButtonText}>START GAME</Text>
+          <Text style={styles.playButtonText}>CLASSIC MODE</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={[styles.playButton, { backgroundColor: '#E74C3C', marginTop: 20 }]} onPress={() => router.push({ pathname: '/game', params: { mode: 'endless' } })}>

@@ -2,7 +2,6 @@ import React, { useState, useEffect, useContext } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Image } from 'react-native';
 import { useRouter, useLocalSearchParams, Stack } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Haptics from 'expo-haptics';
 import { MenuContext, LEVELS } from '../constants';
 
 const { width } = Dimensions.get('window');
@@ -15,17 +14,22 @@ export default function GameScreen() {
   
   const isEndless = params.mode === 'endless';
   const levelIdx = parseInt(params.level as string) || 0;
-  const config = isEndless ? { level: '∞', gridSize: 4, target: 999, time: 999, speed: 700 } : LEVELS[levelIdx];
+  
+  // Configuration fallback for Endless vs Classic
+  const config = isEndless 
+    ? { level: '∞', gridSize: 4, target: 999, time: 999, speed: 700, moleDuration: 900 } 
+    : LEVELS[levelIdx];
 
   const [score, setScore] = useState(0);
-  const [highScore, setHighScore] = useState(0); // Track best Endless score
+  const [highScore, setHighScore] = useState(0);
   const [lives, setLives] = useState(3);
   const [timeLeft, setTimeLeft] = useState(config.time);
-  const [activeSquare, setActiveSquare] = useState<number | null>(null);
-  const [redSquare, setRedSquare] = useState<number | null>(null);
+  
+  // Arrays handle multiple simultaneous moles/traps for the Grace Period
+  const [activeMoles, setActiveMoles] = useState<number[]>([]);
+  const [activeTraps, setActiveTraps] = useState<number[]>([]);
   const [gameState, setGameState] = useState<'PLAYING' | 'WON' | 'LOST'>('PLAYING');
 
-  // Load High Score on Start
   useEffect(() => {
     if (isEndless) {
       AsyncStorage.getItem('endlessHighScore').then(val => {
@@ -40,11 +44,11 @@ export default function GameScreen() {
     setLives(3);
     setTimeLeft(config.time);
     setGameState('PLAYING');
-    setActiveSquare(null);
-    setRedSquare(null);
+    setActiveMoles([]);
+    setActiveTraps([]);
   };
 
-  // Clock Hook
+  // 1. CLOCK LOGIC (Classic only)
   useEffect(() => {
     if (gameState !== 'PLAYING' || isPaused || isEndless) return;
     const clockTimer = setInterval(() => {
@@ -53,24 +57,58 @@ export default function GameScreen() {
     return () => clearInterval(clockTimer);
   }, [gameState, isPaused, isEndless]);
 
-  // Mole & Trap Hook
+  // 2. DYNAMIC SPAWNER (Grace Period & Difficulty Scaling)
   useEffect(() => {
     if (gameState !== 'PLAYING' || isPaused) return;
-    const moleTimer = setInterval(() => {
-      const newMole = Math.floor(Math.random() * (config.gridSize * config.gridSize));
-      setActiveSquare(newMole);
-      if (isEndless && Math.random() > 0.6) {
-        let newTrap = Math.floor(Math.random() * (config.gridSize * config.gridSize));
-        while (newTrap === newMole) newTrap = Math.floor(Math.random() * (config.gridSize * config.gridSize));
-        setRedSquare(newTrap);
-      } else {
-        setRedSquare(null);
-      }
-    }, config.speed);
-    return () => clearInterval(moleTimer);
-  }, [gameState, isPaused, config.speed]);
 
-  // Win/Loss Checker
+    let currentSpeed = config.speed;
+    let currentDuration = config.moleDuration || Math.floor(config.speed * 1.4);
+
+    // Endless Mode Difficulty Ramp
+    if (isEndless && score > 50) {
+        currentSpeed = Math.max(350, config.speed - (score - 50) * 5);
+        currentDuration = Math.floor(currentSpeed * 1.4);
+    }
+
+    const gameLoop = setInterval(() => {
+      const totalSquares = config.gridSize * config.gridSize;
+      const newMoleIndex = Math.floor(Math.random() * totalSquares);
+
+      // Add Mole
+      setActiveMoles(prev => [...prev, newMoleIndex]);
+      
+      // Auto-remove Mole after Duration
+      setTimeout(() => {
+        setActiveMoles(prev => {
+          const idx = prev.indexOf(newMoleIndex);
+          if (idx > -1) {
+            const updated = [...prev];
+            updated.splice(idx, 1);
+            return updated;
+          }
+          return prev;
+        });
+      }, currentDuration);
+
+      // Handle Traps
+      if (isEndless) {
+          const trapChance = score > 100 ? 0.55 : 0.40;
+          if (Math.random() < trapChance) {
+              const trapIndex = Math.floor(Math.random() * totalSquares);
+              if (!activeMoles.includes(trapIndex)) {
+                  setActiveTraps(prev => [...prev, trapIndex]);
+                  setTimeout(() => {
+                      setActiveTraps(prev => prev.filter(t => t !== trapIndex));
+                  }, currentDuration);
+              }
+          }
+      }
+    }, currentSpeed);
+
+    return () => clearInterval(gameLoop);
+  }, [gameState, isPaused, score, config]);
+
+  // 3. WIN/LOSS CONDITIONS
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
     if (lives <= 0) {
@@ -99,14 +137,30 @@ export default function GameScreen() {
 
   const handleTap = (index: number) => {
     if (gameState !== 'PLAYING' || isPaused) return;
-    if (index === activeSquare) {
+
+    if (activeMoles.includes(index)) {
       setScore(prev => prev + 1);
-      setActiveSquare(null);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } else if (index === redSquare || !isEndless) { // Only penalize "wrong square" hits if not hit mole
-        setLives(prev => Math.max(0, prev - 1));
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      // Remove specifically the mole that was tapped
+      setActiveMoles(prev => {
+          const idx = prev.indexOf(index);
+          const updated = [...prev];
+          updated.splice(idx, 1);
+          return updated;
+      });
+    } else {
+      // Penalty for hitting Traps or empty squares
+      setLives(prev => Math.max(0, prev - 1));
     }
+  };
+
+  const renderHearts = () => {
+    const hearts = [];
+    for (let i = 1; i <= 3; i++) {
+      hearts.push(
+        <Text key={i} style={[styles.heart, i > lives && styles.fadedHeart]}>❤️</Text>
+      );
+    }
+    return hearts;
   };
 
   return (
@@ -117,7 +171,7 @@ export default function GameScreen() {
           headerBackVisible: false,
           headerTitle: () => (
             <Image 
-              source={require('../assets/images/gavel.png')}
+              source={require('../assets/images/gavel.png')} 
               style={{ width: 40, height: 40, resizeMode: 'contain' }} 
             />
           )
@@ -125,8 +179,11 @@ export default function GameScreen() {
       />
       
       <View style={styles.headerInfo}>
-        <Text style={styles.levelLabel}>{isEndless ? 'ENDLESS MODE' : `LEVEL ${config.level}`}</Text>
-        <Text style={styles.livesText}>{lives > 0 ? '❤️ '.repeat(lives) : '💀 DEAD'}</Text>
+        <Text style={styles.levelLabel}>
+          {isEndless ? 'ENDLESS MODE' : `LEVEL ${config.level}`}
+          {!isEndless && <Text style={styles.targetLabel}>  •  TARGET: {config.target}</Text>}
+        </Text>
+        <View style={styles.livesRow}>{renderHearts()}</View>
       </View>
 
       <View style={styles.statsRow}>
@@ -139,8 +196,10 @@ export default function GameScreen() {
           <Text style={styles.statValue}>{isEndless ? highScore : `${timeLeft}s`}</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={styles.statLabel}>{isEndless ? 'MODE' : 'TARGET'}</Text>
-          <Text style={styles.statValue}>{isEndless ? '∞' : config.target}</Text>
+          <Text style={styles.statLabel}>{isEndless ? 'SPEED' : 'TARGET'}</Text>
+          <Text style={styles.statValue}>
+            {isEndless ? `${Math.max(350, config.speed - (score > 50 ? (score - 50) * 5 : 0))}ms` : config.target}
+          </Text>
         </View>
       </View>
 
@@ -152,8 +211,8 @@ export default function GameScreen() {
             style={[styles.square, { width: (width - 40) / config.gridSize, height: (width - 40) / config.gridSize }]}
             onPress={() => handleTap(i)}
           >
-            {activeSquare === i && <View style={styles.mole} />}
-            {redSquare === i && <View style={[styles.mole, { backgroundColor: '#E74C3C' }]} />}
+            {activeMoles.includes(i) && <View style={styles.mole} />}
+            {activeTraps.includes(i) && <View style={[styles.mole, { backgroundColor: '#E74C3C' }]} />}
           </TouchableOpacity>
         ))}
       </View>
@@ -179,12 +238,15 @@ export default function GameScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#1A1A1A', alignItems: 'center' },
   headerInfo: { alignItems: 'center', marginTop: 10, marginBottom: 15 },
-  levelLabel: { color: '#F1C40F', fontSize: 22, fontWeight: '900', letterSpacing: 4, marginBottom: 10 },
-  livesText: { fontSize: 26, letterSpacing: 5 },
+  levelLabel: { color: '#F1C40F', fontSize: 20, fontWeight: '900', letterSpacing: 2, marginBottom: 10 },
+  targetLabel: { color: '#666', fontSize: 14, fontWeight: 'bold' },
+  livesRow: { flexDirection: 'row', gap: 10 },
+  heart: { fontSize: 26 },
+  fadedHeart: { opacity: 0.2 },
   statsRow: { flexDirection: 'row', backgroundColor: '#222', width: '90%', borderRadius: 15, marginBottom: 40, overflow: 'hidden' },
   statCard: { flex: 1, paddingVertical: 15, alignItems: 'center', justifyContent: 'center' },
   statLabel: { color: '#888', fontSize: 10, fontWeight: '900', marginBottom: 5 },
-  statValue: { color: '#FFF', fontSize: 22, fontWeight: '900' },
+  statValue: { color: '#FFF', fontSize: 20, fontWeight: '900' },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   square: { backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
   mole: { width: '85%', height: '85%', backgroundColor: '#F1C40F', borderRadius: 15 },
@@ -192,5 +254,5 @@ const styles = StyleSheet.create({
   resultText: { color: '#FFF', fontSize: 32, fontWeight: '900', marginBottom: 40, letterSpacing: 2 },
   button: { backgroundColor: '#F1C40F', paddingHorizontal: 50, paddingVertical: 20, borderRadius: 50 },
   buttonText: { color: '#1A1A1A', fontSize: 22, fontWeight: '900', letterSpacing: 1 },
-  quitText: { color: '#666', fontSize: 16, fontWeight: 'bold', textDecorationLine: 'underline' },
+  quitText: { color: '#666', fontSize: 16, fontWeight: 'bold'},
 });
