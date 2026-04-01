@@ -25,7 +25,6 @@ export default function GameScreen() {
   const [lives, setLives] = useState(3);
   const [timeLeft, setTimeLeft] = useState(config.time);
   
-  // Arrays handle multiple simultaneous moles/traps for the Grace Period
   const [activeMoles, setActiveMoles] = useState<number[]>([]);
   const [activeTraps, setActiveTraps] = useState<number[]>([]);
   const [gameState, setGameState] = useState<'PLAYING' | 'WON' | 'LOST'>('PLAYING');
@@ -57,7 +56,7 @@ export default function GameScreen() {
     return () => clearInterval(clockTimer);
   }, [gameState, isPaused, isEndless]);
 
-  // 2. DYNAMIC SPAWNER (Grace Period & Difficulty Scaling)
+  // 2. DYNAMIC SPAWNER (Collision Fix & Auto-Dismiss Timer)
   useEffect(() => {
     if (gameState !== 'PLAYING' || isPaused) return;
 
@@ -65,48 +64,54 @@ export default function GameScreen() {
     let currentDuration = config.moleDuration || Math.floor(config.speed * 1.4);
 
     // Endless Mode Difficulty Ramp
-    if (isEndless && score > 50) {
+    if (isEndless && score > 30) {
         currentSpeed = Math.max(350, config.speed - (score - 50) * 5);
         currentDuration = Math.floor(currentSpeed * 1.4);
     }
 
     const gameLoop = setInterval(() => {
       const totalSquares = config.gridSize * config.gridSize;
-      const newMoleIndex = Math.floor(Math.random() * totalSquares);
-
+      
+      // FIX: Generate valid Mole Index (Must not land on an existing Trap)
+      let newMoleIndex: number;
+      do {
+        newMoleIndex = Math.floor(Math.random() * totalSquares);
+      } while (activeTraps.includes(newMoleIndex));
+    
       // Add Mole
       setActiveMoles(prev => [...prev, newMoleIndex]);
       
-      // Auto-remove Mole after Duration
+      // FIX: Auto-remove Mole after duration (Despawn Logic)
       setTimeout(() => {
-        setActiveMoles(prev => {
-          const idx = prev.indexOf(newMoleIndex);
-          if (idx > -1) {
-            const updated = [...prev];
-            updated.splice(idx, 1);
-            return updated;
-          }
-          return prev;
-        });
+        setActiveMoles(prev => prev.filter(m => m !== newMoleIndex));
       }, currentDuration);
-
-      // Handle Traps
+    
+      // Handle Traps (Endless Mode Only)
       if (isEndless) {
-          const trapChance = score > 100 ? 0.55 : 0.40;
-          if (Math.random() < trapChance) {
-              const trapIndex = Math.floor(Math.random() * totalSquares);
-              if (!activeMoles.includes(trapIndex)) {
-                  setActiveTraps(prev => [...prev, trapIndex]);
-                  setTimeout(() => {
-                      setActiveTraps(prev => prev.filter(t => t !== trapIndex));
-                  }, currentDuration);
-              }
-          }
+        const trapChance = score > 100 ? 0.55 : 0.40;
+        if (Math.random() < trapChance) {
+          let trapIndex: number;
+          // FIX: Ensure Trap doesn't land on the new Mole, any active Moles, or active Traps
+          do {
+            trapIndex = Math.floor(Math.random() * totalSquares);
+          } while (
+            trapIndex === newMoleIndex || 
+            activeMoles.includes(trapIndex) || 
+            activeTraps.includes(trapIndex)
+          );
+    
+          setActiveTraps(prev => [...prev, trapIndex]);
+          
+          // FIX: Auto-remove Trap after duration
+          setTimeout(() => {
+            setActiveTraps(prev => prev.filter(t => t !== trapIndex));
+          }, currentDuration);
+        }
       }
     }, currentSpeed);
 
     return () => clearInterval(gameLoop);
-  }, [gameState, isPaused, score, config]);
+  }, [gameState, isPaused, score, activeMoles, activeTraps]);
 
   // 3. WIN/LOSS CONDITIONS
   useEffect(() => {
@@ -126,7 +131,7 @@ export default function GameScreen() {
 
   const saveProgress = async () => {
     const current = await AsyncStorage.getItem('unlockedLevel');
-    const next = config.level + 1;
+    const next = levelIdx + 2; // Level index starts at 0, so next is index + 1 + 1
     if (!current || next > parseInt(current)) await AsyncStorage.setItem('unlockedLevel', next.toString());
   };
 
@@ -141,12 +146,7 @@ export default function GameScreen() {
     if (activeMoles.includes(index)) {
       setScore(prev => prev + 1);
       // Remove specifically the mole that was tapped
-      setActiveMoles(prev => {
-          const idx = prev.indexOf(index);
-          const updated = [...prev];
-          updated.splice(idx, 1);
-          return updated;
-      });
+      setActiveMoles(prev => prev.filter(m => m !== index));
     } else {
       // Penalty for hitting Traps or empty squares
       setLives(prev => Math.max(0, prev - 1));
@@ -165,18 +165,9 @@ export default function GameScreen() {
 
   return (
     <View style={styles.container}>
-      <Stack.Screen 
-        options={{ 
-          headerLeft: () => null, 
-          headerBackVisible: false,
-          headerTitle: () => (
-            <Image 
-              source={require('../assets/images/gavel.png')} 
-              style={{ width: 40, height: 40, resizeMode: 'contain' }} 
-            />
-          )
-        }} 
-      />
+      {/* Note: We removed Stack.Screen options here to let 
+        RootLayout (_layout.tsx) handle the header globally. 
+      */}
       
       <View style={styles.headerInfo}>
         <Text style={styles.levelLabel}>
