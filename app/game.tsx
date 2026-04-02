@@ -64,8 +64,8 @@ export default function GameScreen() {
     let currentDuration = config.moleDuration || Math.floor(config.speed * 1.4);
 
     // Endless Mode Difficulty Ramp
-    if (isEndless && score > 30) {
-        currentSpeed = Math.max(350, config.speed - (score - 50) * 5);
+    if (isEndless && score > 35) {
+        currentSpeed = Math.max(350, config.speed - (score - 35) * 5);
         currentDuration = Math.floor(currentSpeed * 1.4);
     }
 
@@ -189,7 +189,7 @@ export default function GameScreen() {
         <View style={styles.statCard}>
           <Text style={styles.statLabel}>{isEndless ? 'SPEED' : 'TARGET'}</Text>
           <Text style={styles.statValue}>
-            {isEndless ? `${Math.max(350, config.speed - (score > 50 ? (score - 50) * 5 : 0))}ms` : config.target}
+            {isEndless ? `${Math.max(350, config.speed - (score > 35 ? (score - 35) * 5 : 0))}ms` : config.target}
           </Text>
         </View>
       </View>

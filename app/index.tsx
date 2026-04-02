@@ -21,7 +21,7 @@ export default function HomeScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Image source={require('../assets/images/gavel.png')} style={styles.headerImage} />
-        <Text style={styles.title}>TAP-THAT</Text>
+        <Text style={styles.title}>Hole-y Mole-y!</Text>
       </View>
 
       <View style={styles.menuContainer}>
