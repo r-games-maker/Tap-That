@@ -53,10 +53,7 @@ export default function RootLayout() {
                 {/* Spacer to keep Gavel centered */}
                 <View style={{ width: 40 }} /> 
 
-                <Image 
-                    source={require('../assets/images/gavel.png')} 
-                    style={{ width: 40, height: 40, resizeMode: 'contain' }} 
-                />
+                <Text style={styles.headerTitleText}>Hole-y Mole-y!</Text>
 
                 <Pressable 
                     onPress={() => setMenuVisible(true)}
@@ -166,6 +163,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.85)', 
     justifyContent: 'center', 
     alignItems: 'flex-end' 
+  },
+  headerTitleText: {
+    color: '#F1C40F',
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase', // Optional: makes it feel more like a "Game Logo"
   },
   menuContainer: { 
     backgroundColor: '#222', 

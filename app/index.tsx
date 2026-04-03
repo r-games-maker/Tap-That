@@ -20,8 +20,8 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Image source={require('../assets/images/gavel.png')} style={styles.headerImage} />
-        <Text style={styles.title}>Hole-y Mole-y!</Text>
+        <Image source={require('../assets/images/icon.png')} style={styles.mainLogo}/>
+        
       </View>
 
       <View style={styles.menuContainer}>
@@ -78,4 +78,9 @@ const styles = StyleSheet.create({
   levelCard: { width: 70, height: 70, backgroundColor: '#333', borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   lockedCard: { backgroundColor: '#111' },
   levelNumber: { color: '#F1C40F', fontSize: 22, fontWeight: '900' },
+  mainLogo: {
+    width: 250,        // Drastically increases the size
+    height: 250,       // Keep identical to width to prevent stretching
+    resizeMode: 'contain', 
+  },
 });
