@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Image } from 'react-native';
 import { useRouter, useLocalSearchParams, Stack } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics'; // 1. Import the Haptics library
 import { MenuContext, LEVELS } from '../constants';
 
 const { width } = Dimensions.get('window');
@@ -15,7 +16,6 @@ export default function GameScreen() {
   const isEndless = params.mode === 'endless';
   const levelIdx = parseInt(params.level as string) || 0;
   
-  // Configuration fallback for Endless vs Classic
   const config = isEndless 
     ? { level: '∞', gridSize: 4, target: 999, time: 999, speed: 700, moleDuration: 900 } 
     : LEVELS[levelIdx];
@@ -47,7 +47,6 @@ export default function GameScreen() {
     setActiveTraps([]);
   };
 
-  // 1. CLOCK LOGIC (Classic only)
   useEffect(() => {
     if (gameState !== 'PLAYING' || isPaused || isEndless) return;
     const clockTimer = setInterval(() => {
@@ -56,14 +55,12 @@ export default function GameScreen() {
     return () => clearInterval(clockTimer);
   }, [gameState, isPaused, isEndless]);
 
-  // 2. DYNAMIC SPAWNER (Collision Fix & Auto-Dismiss Timer)
   useEffect(() => {
     if (gameState !== 'PLAYING' || isPaused) return;
 
     let currentSpeed = config.speed;
     let currentDuration = config.moleDuration || Math.floor(config.speed * 1.4);
 
-    // Endless Mode Difficulty Ramp
     if (isEndless && score > 35) {
         currentSpeed = Math.max(350, config.speed - (score - 35) * 5);
         currentDuration = Math.floor(currentSpeed * 1.4);
@@ -72,26 +69,21 @@ export default function GameScreen() {
     const gameLoop = setInterval(() => {
       const totalSquares = config.gridSize * config.gridSize;
       
-      // FIX: Generate valid Mole Index (Must not land on an existing Trap)
       let newMoleIndex: number;
       do {
         newMoleIndex = Math.floor(Math.random() * totalSquares);
       } while (activeTraps.includes(newMoleIndex));
     
-      // Add Mole
       setActiveMoles(prev => [...prev, newMoleIndex]);
       
-      // FIX: Auto-remove Mole after duration (Despawn Logic)
       setTimeout(() => {
         setActiveMoles(prev => prev.filter(m => m !== newMoleIndex));
       }, currentDuration);
     
-      // Handle Traps (Endless Mode Only)
       if (isEndless) {
         const trapChance = score > 100 ? 0.55 : 0.40;
         if (Math.random() < trapChance) {
           let trapIndex: number;
-          // FIX: Ensure Trap doesn't land on the new Mole, any active Moles, or active Traps
           do {
             trapIndex = Math.floor(Math.random() * totalSquares);
           } while (
@@ -102,7 +94,6 @@ export default function GameScreen() {
     
           setActiveTraps(prev => [...prev, trapIndex]);
           
-          // FIX: Auto-remove Trap after duration
           setTimeout(() => {
             setActiveTraps(prev => prev.filter(t => t !== trapIndex));
           }, currentDuration);
@@ -111,9 +102,8 @@ export default function GameScreen() {
     }, currentSpeed);
 
     return () => clearInterval(gameLoop);
-  }, [gameState, isPaused, score, activeMoles, activeTraps]);
+  }, [gameState, isPaused, score, config, activeMoles, activeTraps]);
 
-  // 3. WIN/LOSS CONDITIONS
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
     if (lives <= 0) {
@@ -131,7 +121,7 @@ export default function GameScreen() {
 
   const saveProgress = async () => {
     const current = await AsyncStorage.getItem('unlockedLevel');
-    const next = levelIdx + 2; // Level index starts at 0, so next is index + 1 + 1
+    const next = levelIdx + 2; 
     if (!current || next > parseInt(current)) await AsyncStorage.setItem('unlockedLevel', next.toString());
   };
 
@@ -145,11 +135,16 @@ export default function GameScreen() {
 
     if (activeMoles.includes(index)) {
       setScore(prev => prev + 1);
-      // Remove specifically the mole that was tapped
       setActiveMoles(prev => prev.filter(m => m !== index));
+      
+      // Optional: Add a very light tap sensation for successful hits
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      
     } else {
-      // Penalty for hitting Traps or empty squares
       setLives(prev => Math.max(0, prev - 1));
+      
+      // 2. Trigger a sharp error vibration when losing a life
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   };
 
@@ -165,10 +160,6 @@ export default function GameScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Note: We removed Stack.Screen options here to let 
-        RootLayout (_layout.tsx) handle the header globally. 
-      */}
-      
       <View style={styles.headerInfo}>
         <Text style={styles.levelLabel}>
           {isEndless ? 'ENDLESS MODE' : `LEVEL ${config.level}`}
