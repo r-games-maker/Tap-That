@@ -9,6 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
+      "bundleIdentifier": "com.yourname.holeymoley", 
+      "buildNumber": "1",
       "supportsTablet": true
     },
     "android": {
